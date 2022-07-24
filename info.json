@@ -1,0 +1,12 @@
+{
+  "commit": {
+    "commit": "1f2a683fb840a6afd1163df8457145d3e660a025",
+    "author": "wlandau <will.landau@gmail.com>",
+    "time": "2022-06-24 14:52:28",
+    "files": 2,
+    "merge": false,
+    "message": "Dev version\n"
+  },
+  "repo": "https://github.com/ropensci/jagstargets",
+  "pkg": "jagstargets"
+}
