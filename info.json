@@ -1,0 +1,12 @@
+{
+  "commit": {
+    "commit": "6c1e96db0505a595d948675543eae4fdb9437905",
+    "author": "wlandau-lilly <will.landau@lilly.com>",
+    "time": "2024-02-20 18:38:43",
+    "files": 3,
+    "merge": false,
+    "message": "r-universe\n"
+  },
+  "repo": "https://github.com/ropensci/jagstargets",
+  "pkg": "jagstargets"
+}
