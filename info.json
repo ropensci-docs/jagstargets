@@ -1,0 +1,13 @@
+{
+  "commit": {
+    "commit": "fef92d0d74f6e9832459ce4bee69396bca21fd3f",
+    "author": "Will Landau <1580860+wlandau@users.noreply.github.com>",
+    "time": "2024-12-03T12:24:52Z",
+    "files": 1,
+    "merge": false,
+    "message": "Update NEWS.md"
+  },
+  "repo": "https://github.com/ropensci/jagstargets",
+  "pkg": "jagstargets",
+  "time": "2026-09-06T03:18:23Z"
+}
