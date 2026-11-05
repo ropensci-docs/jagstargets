@@ -1,0 +1,312 @@
+# Bayesian simulation pipelines with jagstargets
+
+The [introductory
+vignette](https://docs.ropensci.org/jagstargets/articles/introduction.html)
+vignette caters to Bayesian data analysis workflows with few datasets to
+analyze. However, it is sometimes desirable to run one or more Bayesian
+models repeatedly across many simulated datasets. Examples:
+
+1.  Validate the implementation of a Bayesian model, using simulation to
+    determine how reliably the model estimates the parameters under
+    known data-generating scenarios.
+2.  Simulate a randomized controlled experiment to explore frequentist
+    properties such as power and Type I error.
+
+This vignette focuses on (1). The goal of this particular example to
+simulate multiple datasets from the model below, analyze each dataset,
+and assess how often the estimated posterior intervals cover the true
+parameters from the prior predictive simulations. The quantile method by
+Cook et al. (2006) generalizes this concept, and simulation-based
+calibration (Talts et al. 2020) generalizes further. The interval-based
+technique featured in this vignette is not as robust as SBC, but it may
+be more expedient for large models because it does not require visual
+inspection of multiple histograms.
+
+Consider a simple regression model with a continuous response `y` with a
+covariate `x`.
+
+\\ \begin{aligned} y_i &\stackrel{\text{iid}}{\sim}
+\text{Normal}(\beta_1 + x_i \beta_2, 1) \\ \beta_1, \beta_2
+&\stackrel{\text{iid}}{\sim} \text{Normal}(0, 1) \end{aligned} \\
+
+We write this model in a JAGS model file.
+
+``` r
+
+lines <- "model {
+  for (i in 1:n) {
+    y[i] ~ dnorm(beta[1] + x[i] * beta[2], 1)
+  }
+  for (i in 1:2) {
+    beta[i] ~ dnorm(0, 1)
+  }
+}"
+writeLines(lines, "model.jags")
+```
+
+Next, we define a pipeline to simulate multiple datasets and fit each
+dataset with the model. In our data-generating function, we put the true
+parameter values of each simulation in a special `.join_data` list.
+`jagstargets` will automatically join the elements of `.join_data` to
+the correspondingly named variables in the summary output. This will
+make it super easy to check how often our posterior intervals capture
+the truth. As for scale, generate 20 datasets (5 batches with 4
+replications each) and run the model on each of the 20 datasets.[^1] By
+default, each of the 20 model runs computes 3 MCMC chains with 2000 MCMC
+iterations each (including burn-in) and you can adjust with the
+`n.chains` and `n.iter` arguments of
+[`tar_jags_rep_summary()`](https://docs.ropensci.org/jagstargets/reference/tar_jags_rep_summary.md).
+
+``` r
+
+# _targets.R
+library(targets)
+library(jagstargets)
+options(crayon.enabled = FALSE)
+# Use computer memory more sparingly:
+tar_option_set(memory = "transient", garbage_collection = TRUE)
+
+generate_data <- function(n = 10L) {
+  beta <- stats::rnorm(n = 2, mean = 0, sd = 1)
+  x <- seq(from = -1, to = 1, length.out = n)
+  y <- stats::rnorm(n, beta[1] + x * beta[2], 1)
+  # Elements of .join_data get joined on to the .join_data column
+  # in the summary output next to the model parameters
+  # with the same names.
+  .join_data <- list(beta = beta)
+  list(n = n, x = x, y = y, .join_data = .join_data)
+}
+
+list(
+  tar_jags_rep_summary(
+    model,
+    "model.jags",
+    data = generate_data(),
+    parameters.to.save = "beta",
+    batches = 5, # Number of branch targets.
+    reps = 4, # Number of model reps per branch target.
+    variables = "beta",
+    summaries = list(
+      ~posterior::quantile2(.x, probs = c(0.025, 0.975))
+    )
+  )
+)
+```
+
+We now have a pipeline that runs the model 10 times: 5 batches (branch
+targets) with 4 replications per batch.
+
+``` r
+
+tar_visnetwork()
+```
+
+Run the computation with
+[`tar_make()`](https://docs.ropensci.org/targets/reference/tar_make.html)
+
+``` r
+
+tar_make()
+```
+
+The result is an aggregated data frame of summary statistics, where the
+`.rep` column distinguishes among individual replicates. We have the
+posterior intervals for `beta` in columns `q2.5` and `q97.5`. And thanks
+to the `.join_data` list we included in `generate_data()`, our output
+has a `.join_data` column with the true values of the parameters in our
+simulations.
+
+``` r
+
+tar_load(model)
+model
+```
+
+Now, let’s assess how often the estimated 95% posterior intervals
+capture the true values of `beta`. If the model is implemented
+correctly, the coverage value below should be close to 95%. (Ordinarily,
+we would [increase the number of batches and reps per
+batch](https://books.ropensci.org/targets/dynamic.html#batching) and
+[run batches in parallel
+computing](https://books.ropensci.org/targets/hpc.html).)
+
+``` r
+
+library(dplyr)
+model %>%
+  group_by(variable) %>%
+  dplyr::summarize(coverage = mean(q2.5 < .join_data & .join_data < q97.5))
+```
+
+For maximum reproducibility, we should express the coverage assessment
+as a custom function and a target in the pipeline.
+
+``` r
+
+# _targets.R
+# packages needed to define the pipeline:
+library(targets)
+library(jagstargets)
+
+tar_option_set(
+  packages = "dplyr", # packages needed to run the pipeline
+  memory = "transient", # memory efficiency
+  garbage_collection = TRUE # memory efficiency
+)
+
+generate_data <- function(n = 10L) {
+  beta <- stats::rnorm(n = 2, mean = 0, sd = 1)
+  x <- seq(from = -1, to = 1, length.out = n)
+  y <- stats::rnorm(n, beta[1] + x * beta[2], 1)
+  # Elements of .join_data get joined on to the .join_data column
+  # in the summary output next to the model parameters
+  # with the same names.
+  .join_data <- list(beta = beta)
+  list(n = n, x = x, y = y, .join_data = .join_data)
+}
+
+list(
+  tar_jags_rep_summary(
+    model,
+    "model.jags",
+    data = generate_data(),
+    parameters.to.save = "beta",
+    batches = 5, # Number of branch targets.
+    reps = 4, # Number of model reps per branch target.
+    variables = "beta",
+    summaries = list(
+      ~posterior::quantile2(.x, probs = c(0.025, 0.975))
+    )
+  ),
+  tar_target(
+    coverage,
+    model %>%
+      group_by(variable) %>%
+      summarize(
+        coverage = mean(q2.5 < .join_data & .join_data < q97.5),
+        .groups = "drop"
+      )
+  )
+)
+```
+
+The new `coverage` target should the only outdated target, and it should
+be connected to the upstream `model` target.
+
+``` r
+
+tar_visnetwork()
+```
+
+When we run the pipeline, only the coverage assessment should run. That
+way, we skip all the expensive computation of simulating datasets and
+running MCMC multiple times.
+
+``` r
+
+tar_make()
+```
+
+``` r
+
+tar_read(coverage)
+```
+
+## Multiple models
+
+`tar_jags_rep_mcmc_summary()` and similar functions allow you to supply
+multiple jags models. If you do, each model will share the the same
+collection of datasets, and the `.dataset_id` column of the model target
+output allows for custom analyses that compare different models against
+each other. Below, we add a new `model2.jags` file to the `jags_files`
+argument of `tar_jags_rep_mcmc_summary()`. In the coverage summary
+below, we group by `.name` to compute a coverage statistic for each
+model.
+
+``` r
+
+lines <- "model {
+  for (i in 1:n) {
+    y[i] ~ dnorm(beta[1] + x[i] * x[i] * beta[2], 1) # Regress on x^2, not x.
+  }
+  for (i in 1:2) {
+    beta[i] ~ dnorm(0, 1)
+  }
+}"
+writeLines(lines, "model2.jags")
+```
+
+``` r
+
+# _targets.R
+# packages needed to define the pipeline:
+library(targets)
+library(jagstargets)
+
+tar_option_set(
+  packages = "dplyr", # packages needed to run the pipeline
+  memory = "transient", # memory efficiency
+  garbage_collection = TRUE # memory efficiency
+)
+
+generate_data <- function(n = 10L) {
+  beta <- stats::rnorm(n = 2, mean = 0, sd = 1)
+  x <- seq(from = -1, to = 1, length.out = n)
+  y <- stats::rnorm(n, beta[1] + x * beta[2], 1)
+  # Elements of .join_data get joined on to the .join_data column
+  # in the summary output next to the model parameters
+  # with the same names.
+  .join_data <- list(beta = beta)
+  list(n = n, x = x, y = y, .join_data = .join_data)
+}
+
+list(
+  tar_jags_rep_summary(
+    model,
+    c("model.jags", "model2.jags"), # another model
+    data = generate_data(),
+    parameters.to.save = "beta",
+    batches = 5,
+    reps = 4,
+    variables = "beta",
+    summaries = list(
+      ~posterior::quantile2(.x, probs = c(0.025, 0.975))
+    )
+  ),
+  tar_target(
+    coverage,
+    model %>%
+      group_by(.name) %>%
+      summarize(coverage = mean(q2.5 < .join_data & .join_data < q97.5))
+  )
+)
+```
+
+In the graph below, notice how targets `model_model1` and `model_model2`
+are both connected to `model_data` upstream. Downstream, `model` is
+equivalent to `dplyr::bind_rows(model_model1, model_model2)`, and it
+will have special columns `.name` and `.file` to distinguish among all
+the models.
+
+``` r
+
+tar_visnetwork()
+```
+
+## References
+
+Cook, Samantha R., Andrew Gelman, and Donald B. Rubin. 2006. “Validation
+of Software for Bayesian Models Using Posterior Quantiles.” *Journal of
+Computational and Graphical Statistics* 15 (3): 675–92.
+
+Talts, Sean, Michael Betancourt, Daniel Simpson, Aki Vehtari, and Andrew
+Gelman. 2020. *Validating Bayesian Inference Algorithms with
+Simulation-Based Calibration*.
+
+[^1]: Internally, each batch is a [dynamic branch
+    target](https://books.ropensci.org/targets/dynamic.html), and the
+    number of replications determines the amount of work done within a
+    branch. In the general case,
+    [batching](https://books.ropensci.org/targets/dynamic.html#batching)
+    is a way to find the right compromise between target-specific
+    overhead and the horizontal scale of the pipeline.
